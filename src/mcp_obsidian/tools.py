@@ -7,7 +7,9 @@ from mcp.types import (
 )
 import json
 import os
+from pathlib import Path
 from . import obsidian
+from . import summarizer
 
 api_key = os.getenv("OBSIDIAN_API_KEY", "")
 obsidian_host = os.getenv("OBSIDIAN_HOST", "127.0.0.1")
@@ -628,5 +630,49 @@ class RecentChangesToolHandler(ToolHandler):
             TextContent(
                 type="text",
                 text=json.dumps(results, indent=2)
+            )
+        ]
+
+
+class SummarizeFolderToolHandler(ToolHandler):
+    def __init__(self):
+        super().__init__("obsidian_summarize_folder")
+
+    def get_tool_description(self):
+        return Tool(
+            name=self.name,
+            description=(
+                "Read all markdown notes in a local Obsidian folder, resolve their first-level "
+                "wikilink and markdown link dependencies, and return the full content ready for "
+                "classification and summarization. After calling this tool, classify each note as "
+                "one of: reading_learning, daily, concerns, work, unknown — then generate a "
+                "structured summary using the matching template sections."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "folder_path": {
+                        "type": "string",
+                        "description": "Absolute path to the Obsidian folder to summarize."
+                    }
+                },
+                "required": ["folder_path"]
+            }
+        )
+
+    def run_tool(self, args: dict) -> Sequence[TextContent | ImageContent | EmbeddedResource]:
+        if "folder_path" not in args:
+            raise RuntimeError("folder_path argument missing")
+
+        folder = Path(args["folder_path"]).expanduser().resolve()
+        if not folder.is_dir():
+            raise RuntimeError(f"'{folder}' is not a directory")
+
+        context = summarizer.build_folder_context(folder)
+
+        return [
+            TextContent(
+                type="text",
+                text=context
             )
         ]
