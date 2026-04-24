@@ -17,6 +17,7 @@ The server implements multiple tools to interact with Obsidian:
 - patch_content: Insert content into an existing note relative to a heading, block reference, or frontmatter field.
 - append_content: Append content to a new or existing file in the vault.
 - delete_file: Delete a file or directory from your vault.
+- summarize_folder: Read all markdown notes in an Obsidian folder and return linked-note context for Claude to summarize.
 
 ### Example prompts
 
@@ -50,6 +51,7 @@ There are two ways to configure the environment with the Obsidian REST API Key.
   }
 }
 ```
+
 Sometimes Claude has issues detecting the location of uv / uvx. You can use `which uvx` to find and paste the full path in above config in such cases.
 
 2. Create a `.env` file in the working directory with the following required variables:

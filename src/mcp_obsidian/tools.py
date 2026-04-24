@@ -7,19 +7,51 @@ from mcp.types import (
 )
 import json
 import os
-from pathlib import Path
+from pathlib import PurePosixPath
 from . import obsidian
 from . import summarizer
 
 api_key = os.getenv("OBSIDIAN_API_KEY", "")
 obsidian_host = os.getenv("OBSIDIAN_HOST", "127.0.0.1")
-vault_path = os.getenv("OBSIDIAN_VAULT_PATH", "")
 
 if api_key == "":
     raise ValueError(f"OBSIDIAN_API_KEY environment variable required. Working directory: {os.getcwd()}")
 
 TOOL_LIST_FILES_IN_VAULT = "obsidian_list_files_in_vault"
 TOOL_LIST_FILES_IN_DIR = "obsidian_list_files_in_dir"
+
+
+def build_folder_context_from_api(api: obsidian.Obsidian, folder_path: str) -> str:
+    folder_path = folder_path.replace("\\", "/").strip("/")
+    filepaths = api.list_markdown_files_in_dir(folder_path)
+    notes = {
+        PurePosixPath(filepath).name: api.get_file_contents(filepath)
+        for filepath in filepaths
+    }
+
+    if not notes:
+        return f"No markdown files found in {folder_path}"
+
+    header = [f"# Obsidian folder: {folder_path}", f"# Notes found: {len(notes)}", ""]
+    blocks = []
+    dep_paths_by_stem = None
+
+    for note_name, content in notes.items():
+        deps = {}
+        for dep_name in summarizer.extract_dep_names(content):
+            if dep_paths_by_stem is None:
+                dep_paths_by_stem = {}
+                for filepath in api.list_markdown_files_in_vault():
+                    dep_paths_by_stem.setdefault(PurePosixPath(filepath).stem.lower(), filepath)
+
+            dep_path = dep_paths_by_stem.get(PurePosixPath(dep_name).stem.lower())
+            if dep_path:
+                deps[PurePosixPath(dep_path).name] = api.get_file_contents(dep_path)
+
+        blocks.append(summarizer.build_note_block(note_name, content, deps))
+
+    return "\n".join(header) + "\n---\n".join(blocks)
+
 
 class ToolHandler():
     def __init__(self, tool_name: str):
@@ -643,7 +675,7 @@ class SummarizeFolderToolHandler(ToolHandler):
         return Tool(
             name=self.name,
             description=(
-                "Read all markdown notes in a local Obsidian folder, resolve their first-level "
+                "Read all markdown notes in an Obsidian folder, resolve their first-level "
                 "wikilink and markdown link dependencies, and return the full content ready for "
                 "classification and summarization. After calling this tool, classify each note as "
                 "one of: reading_learning, daily, concerns, work, unknown — then generate a "
@@ -655,10 +687,8 @@ class SummarizeFolderToolHandler(ToolHandler):
                     "folder_path": {
                         "type": "string",
                         "description": (
-                            "Path to the Obsidian folder to summarize. "
-                            "Accepts a path relative to the vault root (e.g. 'Projects/Data Engineering') "
-                            "or an absolute path. Relative paths require the OBSIDIAN_VAULT_PATH "
-                            "environment variable to be set."
+                            "Path to the Obsidian folder to summarize, relative to the vault root "
+                            "(e.g. 'Projects/Data Engineering')."
                         )
                     }
                 },
@@ -670,24 +700,8 @@ class SummarizeFolderToolHandler(ToolHandler):
         if "folder_path" not in args:
             raise RuntimeError("folder_path argument missing")
 
-        raw = args["folder_path"]
-        candidate = Path(raw).expanduser()
-
-        if candidate.is_absolute():
-            folder = candidate.resolve()
-        elif vault_path:
-            folder = (Path(vault_path) / raw).resolve()
-        else:
-            raise RuntimeError(
-                f"'{raw}' is a relative path but OBSIDIAN_VAULT_PATH is not set. "
-                "Either provide an absolute path or set the OBSIDIAN_VAULT_PATH environment variable."
-            )
-
-        if not folder.is_dir():
-            raise RuntimeError(f"'{folder}' is not a directory")
-
-        vault_root = Path(vault_path).resolve() if vault_path else folder.parent
-        context = summarizer.build_folder_context(folder, vault_root=vault_root)
+        api = obsidian.Obsidian(api_key=api_key, host=obsidian_host)
+        context = build_folder_context_from_api(api, args["folder_path"])
 
         return [
             TextContent(

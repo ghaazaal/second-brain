@@ -1,7 +1,22 @@
 import requests
 import urllib.parse
 import os
+from pathlib import PurePosixPath
 from typing import Any
+
+
+def _normalize_vault_path(path: str) -> str:
+    return path.replace("\\", "/").strip("/")
+
+
+def _join_vault_path(dirpath: str, entry: str) -> str:
+    entry = _normalize_vault_path(entry)
+    dirpath = _normalize_vault_path(dirpath)
+
+    if not dirpath or entry.startswith(f"{dirpath}/"):
+        return entry
+
+    return f"{dirpath}/{entry}"
 
 class Obsidian():
     def __init__(
@@ -66,6 +81,44 @@ class Obsidian():
             return response.json()['files']
 
         return self._safe_call(call_fn)
+
+    def list_markdown_files_in_dir(self, dirpath: str) -> list[str]:
+        dirpath = _normalize_vault_path(dirpath)
+        files = self.list_files_in_vault() if dirpath == "" else self.list_files_in_dir(dirpath)
+
+        return [
+            _join_vault_path(dirpath, f)
+            for f in files
+            if _normalize_vault_path(f).lower().endswith(".md")
+        ]
+
+    def list_markdown_files_in_vault(self) -> list[str]:
+        markdown_files = []
+        dirs_to_scan = [""]
+
+        while dirs_to_scan:
+            dirpath = dirs_to_scan.pop()
+            files = self.list_files_in_vault() if dirpath == "" else self.list_files_in_dir(dirpath)
+
+            for entry in files:
+                full_path = _join_vault_path(dirpath, entry)
+                normalized = _normalize_vault_path(full_path)
+
+                if normalized.lower().endswith(".md"):
+                    markdown_files.append(normalized)
+                elif entry.endswith("/") or PurePosixPath(normalized).suffix == "":
+                    dirs_to_scan.append(normalized)
+
+        return sorted(markdown_files)
+
+    def find_markdown_file_by_stem(self, stem: str) -> str | None:
+        target = PurePosixPath(stem).stem.lower()
+
+        for filepath in self.list_markdown_files_in_vault():
+            if PurePosixPath(filepath).stem.lower() == target:
+                return filepath
+
+        return None
 
     def get_file_contents(self, filepath: str) -> Any:
         url = f"{self.get_base_url()}/vault/{filepath}"
