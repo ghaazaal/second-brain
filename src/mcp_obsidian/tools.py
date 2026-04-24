@@ -13,6 +13,7 @@ from . import summarizer
 
 api_key = os.getenv("OBSIDIAN_API_KEY", "")
 obsidian_host = os.getenv("OBSIDIAN_HOST", "127.0.0.1")
+vault_path = os.getenv("OBSIDIAN_VAULT_PATH", "")
 
 if api_key == "":
     raise ValueError(f"OBSIDIAN_API_KEY environment variable required. Working directory: {os.getcwd()}")
@@ -653,7 +654,12 @@ class SummarizeFolderToolHandler(ToolHandler):
                 "properties": {
                     "folder_path": {
                         "type": "string",
-                        "description": "Absolute path to the Obsidian folder to summarize."
+                        "description": (
+                            "Path to the Obsidian folder to summarize. "
+                            "Accepts a path relative to the vault root (e.g. 'Projects/Data Engineering') "
+                            "or an absolute path. Relative paths require the OBSIDIAN_VAULT_PATH "
+                            "environment variable to be set."
+                        )
                     }
                 },
                 "required": ["folder_path"]
@@ -664,11 +670,24 @@ class SummarizeFolderToolHandler(ToolHandler):
         if "folder_path" not in args:
             raise RuntimeError("folder_path argument missing")
 
-        folder = Path(args["folder_path"]).expanduser().resolve()
+        raw = args["folder_path"]
+        candidate = Path(raw).expanduser()
+
+        if candidate.is_absolute():
+            folder = candidate.resolve()
+        elif vault_path:
+            folder = (Path(vault_path) / raw).resolve()
+        else:
+            raise RuntimeError(
+                f"'{raw}' is a relative path but OBSIDIAN_VAULT_PATH is not set. "
+                "Either provide an absolute path or set the OBSIDIAN_VAULT_PATH environment variable."
+            )
+
         if not folder.is_dir():
             raise RuntimeError(f"'{folder}' is not a directory")
 
-        context = summarizer.build_folder_context(folder)
+        vault_root = Path(vault_path).resolve() if vault_path else folder.parent
+        context = summarizer.build_folder_context(folder, vault_root=vault_root)
 
         return [
             TextContent(

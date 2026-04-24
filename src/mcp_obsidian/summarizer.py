@@ -64,9 +64,10 @@ def build_note_block(note_name: str, content: str, deps: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
-def build_folder_context(folder: Path) -> str:
+def build_folder_context(folder: Path, vault_root: Path | None = None) -> str:
     """Orchestrates loading and building context for all notes in a folder."""
-    vault_root = folder.parent
+    if vault_root is None:
+        vault_root = folder.parent
     notes = note_io.load_notes_in_folder(folder)
 
     if not notes:
