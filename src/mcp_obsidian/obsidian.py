@@ -1,8 +1,11 @@
 import requests
 import urllib.parse
 import os
+import time
 from pathlib import PurePosixPath
 from typing import Any
+
+_VAULT_LIST_TTL = 30  # seconds
 
 
 def _normalize_vault_path(path: str) -> str:
@@ -20,27 +23,30 @@ def _join_vault_path(dirpath: str, entry: str) -> str:
 
 class Obsidian():
     def __init__(
-            self, 
+            self,
             api_key: str,
-            protocol: str = os.getenv('OBSIDIAN_PROTOCOL', 'https').lower(),
-            host: str = str(os.getenv('OBSIDIAN_HOST', '127.0.0.1')),
-            port: int = int(os.getenv('OBSIDIAN_PORT', '27124')),
+            protocol: str | None = None,
+            host: str | None = None,
+            port: int | None = None,
             verify_ssl: bool = False,
         ):
         self.api_key = api_key
-        
-        if protocol == 'http':
-            self.protocol = 'http'
-        else:
-            self.protocol = 'https' # Default to https for any other value, including 'https'
 
-        self.host = host
-        self.port = port
+        raw_protocol = (protocol or os.getenv('OBSIDIAN_PROTOCOL', 'https')).lower()
+        self.protocol = 'http' if raw_protocol == 'http' else 'https'
+        self.host = host or os.getenv('OBSIDIAN_HOST', '127.0.0.1')
+        self.port = port if port is not None else int(os.getenv('OBSIDIAN_PORT', '27124'))
         self.verify_ssl = verify_ssl
         self.timeout = (3, 6)
+        self._vault_list_cache: list[str] | None = None
+        self._vault_list_cache_ts: float = 0.0
 
     def get_base_url(self) -> str:
         return f'{self.protocol}://{self.host}:{self.port}'
+
+    def _make_vault_url(self, path: str) -> str:
+        encoded = urllib.parse.quote(path, safe='/')
+        return f'{self.get_base_url()}/vault/{encoded}'
     
     def _get_headers(self) -> dict:
         headers = {
@@ -61,18 +67,18 @@ class Obsidian():
 
     def list_files_in_vault(self) -> Any:
         url = f"{self.get_base_url()}/vault/"
-        
+
         def call_fn():
             response = requests.get(url, headers=self._get_headers(), verify=self.verify_ssl, timeout=self.timeout)
             response.raise_for_status()
-            
+
             return response.json()['files']
 
         return self._safe_call(call_fn)
 
-        
+
     def list_files_in_dir(self, dirpath: str) -> Any:
-        url = f"{self.get_base_url()}/vault/{dirpath}/"
+        url = self._make_vault_url(dirpath) + "/"
         
         def call_fn():
             response = requests.get(url, headers=self._get_headers(), verify=self.verify_ssl, timeout=self.timeout)
@@ -93,6 +99,10 @@ class Obsidian():
         ]
 
     def list_markdown_files_in_vault(self) -> list[str]:
+        now = time.monotonic()
+        if self._vault_list_cache is not None and (now - self._vault_list_cache_ts) < _VAULT_LIST_TTL:
+            return self._vault_list_cache
+
         markdown_files = []
         dirs_to_scan = [""]
 
@@ -109,7 +119,10 @@ class Obsidian():
                 elif entry.endswith("/") or PurePosixPath(normalized).suffix == "":
                     dirs_to_scan.append(normalized)
 
-        return sorted(markdown_files)
+        result = sorted(markdown_files)
+        self._vault_list_cache = result
+        self._vault_list_cache_ts = now
+        return result
 
     def find_markdown_file_by_stem(self, stem: str) -> str | None:
         target = PurePosixPath(stem).stem.lower()
@@ -121,12 +134,12 @@ class Obsidian():
         return None
 
     def get_file_contents(self, filepath: str) -> Any:
-        url = f"{self.get_base_url()}/vault/{filepath}"
-    
+        url = self._make_vault_url(filepath)
+
         def call_fn():
             response = requests.get(url, headers=self._get_headers(), verify=self.verify_ssl, timeout=self.timeout)
             response.raise_for_status()
-            
+
             return response.text
 
         return self._safe_call(call_fn)
@@ -167,12 +180,12 @@ class Obsidian():
         return self._safe_call(call_fn)
     
     def append_content(self, filepath: str, content: str) -> Any:
-        url = f"{self.get_base_url()}/vault/{filepath}"
-        
+        url = self._make_vault_url(filepath)
+
         def call_fn():
             response = requests.post(
-                url, 
-                headers=self._get_headers() | {'Content-Type': 'text/markdown'}, 
+                url,
+                headers=self._get_headers() | {'Content-Type': 'text/markdown'},
                 data=content,
                 verify=self.verify_ssl,
                 timeout=self.timeout
@@ -183,8 +196,8 @@ class Obsidian():
         return self._safe_call(call_fn)
     
     def patch_content(self, filepath: str, operation: str, target_type: str, target: str, content: str) -> Any:
-        url = f"{self.get_base_url()}/vault/{filepath}"
-        
+        url = self._make_vault_url(filepath)
+
         headers = self._get_headers() | {
             'Content-Type': 'text/markdown',
             'Operation': operation,
@@ -200,12 +213,12 @@ class Obsidian():
         return self._safe_call(call_fn)
 
     def put_content(self, filepath: str, content: str) -> Any:
-        url = f"{self.get_base_url()}/vault/{filepath}"
-        
+        url = self._make_vault_url(filepath)
+
         def call_fn():
             response = requests.put(
-                url, 
-                headers=self._get_headers() | {'Content-Type': 'text/markdown'}, 
+                url,
+                headers=self._get_headers() | {'Content-Type': 'text/markdown'},
                 data=content,
                 verify=self.verify_ssl,
                 timeout=self.timeout
@@ -216,15 +229,7 @@ class Obsidian():
         return self._safe_call(call_fn)
     
     def delete_file(self, filepath: str) -> Any:
-        """Delete a file or directory from the vault.
-        
-        Args:
-            filepath: Path to the file to delete (relative to vault root)
-            
-        Returns:
-            None on success
-        """
-        url = f"{self.get_base_url()}/vault/{filepath}"
+        url = self._make_vault_url(filepath)
         
         def call_fn():
             response = requests.delete(url, headers=self._get_headers(), verify=self.verify_ssl, timeout=self.timeout)
