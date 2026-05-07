@@ -20,7 +20,13 @@ build-backend = "hatchling.build"
 [dependency-groups]
 dev = [
     "pyright>=1.1.389",
+    "pytest>=8.0",
+    "pytest-mock>=3.14",
+    "responses>=0.25",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [project.scripts]
 mcp-obsidian = "mcp_obsidian:main"

@@ -3,6 +3,7 @@
 
 import re
 from pathlib import Path
+from typing import Callable
 
 from . import note_io
 
@@ -19,13 +20,13 @@ TEMPLATES: dict[str, list[str]] = {
 
 def extract_dep_names(content: str) -> set[str]:
     """Pure function: extract linked note names from markdown content."""
-    wikilinks = re.findall(r'\[\[([^\]|#]+?)(?:\|[^\]]*)?\]\]', content)
+    wikilinks = re.findall(r'\[\[([^\]|#]+?)(?:[#|][^\]]*)?\]\]', content)
     md_links  = re.findall(r'\[[^\]]*\]\(([^)]+\.md)\)', content)
     return {name.strip() for name in wikilinks} | {Path(p).stem for p in md_links}
 
 
 def resolve_deps(dep_names: set[str], vault_root: Path) -> dict[str, str]:
-    """Resolve dep names to their content. Skips any that cannot be found."""
+    """Resolve dep names to their content via the filesystem. Skips any that cannot be found."""
     deps = {}
     for name in dep_names:
         found = note_io.find_note_by_name(name, vault_root)
@@ -64,20 +65,41 @@ def build_note_block(note_name: str, content: str, deps: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
+def build_folder_context_from_notes(
+    folder_label: str,
+    notes: dict[str, str],
+    deps_by_note: dict[str, dict[str, str]],
+) -> str:
+    """
+    Core orchestration: build Claude-ready context from pre-loaded note content.
+
+    folder_label: display name for the folder (used in the header)
+    notes: {note_filename: content}
+    deps_by_note: {note_filename: {dep_filename: dep_content}}
+    """
+    if not notes:
+        return f"No markdown files found in {folder_label}"
+
+    header = [f"# Obsidian folder: {folder_label}", f"# Notes found: {len(notes)}", ""]
+    blocks = [
+        build_note_block(name, content, deps_by_note.get(name, {}))
+        for name, content in notes.items()
+    ]
+    return "\n".join(header) + "\n---\n".join(blocks)
+
+
 def build_folder_context(folder: Path, vault_root: Path | None = None) -> str:
-    """Orchestrates loading and building context for all notes in a folder."""
+    """Filesystem-based entry point. Loads notes from disk and delegates to build_folder_context_from_notes."""
     if vault_root is None:
         vault_root = folder.parent
     notes = note_io.load_notes_in_folder(folder)
 
-    if not notes:
-        return f"No markdown files found in {folder}"
-
-    header = [f"# Obsidian folder: {folder}", f"# Notes found: {len(notes)}", ""]
-    blocks = []
-    for note_name, content in notes.items():
-        dep_names = extract_dep_names(content)
-        deps = resolve_deps(dep_names, vault_root)
-        blocks.append(build_note_block(note_name, content, deps))
-
-    return "\n".join(header) + "\n---\n".join(blocks)
+    deps_by_note = {
+        name: resolve_deps(extract_dep_names(content), vault_root)
+        for name, content in notes.items()
+    }
+    return build_folder_context_from_notes(
+        folder_label=str(folder),
+        notes=notes,
+        deps_by_note=deps_by_note,
+    )
